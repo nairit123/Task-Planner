@@ -1,6 +1,9 @@
 import pickle
 import os
 import datetime
+import threading
+import time
+import subprocess
 
 # Helper function to load data from pickle files
 def load_data(filename, default_value):
@@ -20,14 +23,56 @@ reminders = load_data("reminders.pkl", [])
 notes = load_data("notes.pkl", [])
 tasks = load_data("tasks.pkl", [])
 
-def get_date():
-    date_inp = input("Enter the date (MM/DD/YYYY): ")
+# Update existing tasks and reminders to have the new fields if they don't have them
+def update_structure():
+    global tasks, reminders
+    for i in range(len(tasks)):
+        if len(tasks[i]) == 3:
+            tasks[i].extend(["General", "none", []])  # Adding default values for new fields
+    for i in range(len(reminders)):
+        if len(reminders[i]) == 1:
+            reminders[i].extend([None, []])  # Adding default values for new fields
+    save_data("tasks.pkl", tasks)
+    save_data("reminders.pkl", reminders)
+
+update_structure()
+
+# Background thread for handling reminders
+def reminder_thread():
+    while True:
+        now = datetime.datetime.now()
+        for task in tasks:
+            task_name, deadline, priority, category, recurring, reminder_times = task
+            if deadline and deadline <= now:
+                continue  # Skip past deadlines
+            for reminder_time in reminder_times:
+                reminder_datetime = deadline - reminder_time
+                if now >= reminder_datetime and now <= deadline:
+                    subprocess.Popen(['notify-send', f'Reminder: {task_name} due on {deadline}'])
+                    time.sleep(60)
+        for reminder in reminders:
+            reminder_text, reminder_deadline, reminder_times = reminder
+            if reminder_deadline and reminder_deadline <= now:
+                continue  # Skip past deadlines
+            for reminder_time in reminder_times:
+                reminder_datetime = reminder_deadline - reminder_time
+                if now >= reminder_datetime and now <= reminder_deadline:
+                    subprocess.Popen(['notify-send', f'Reminder: {reminder_text} due on {reminder_deadline}'])
+                    time.sleep(60)
+        time.sleep(60)
+
+thread = threading.Thread(target=reminder_thread)
+thread.daemon = True
+thread.start()
+
+def get_datetime():
+    datetime_inp = input("Enter the date and time (MM/DD/YYYY HH:MM): ")
     try:
-        date = datetime.datetime.strptime(date_inp, "%m/%d/%Y")
+        dt = datetime.datetime.strptime(datetime_inp, "%m/%d/%Y %H:%M")
     except ValueError:
-        print("Sorry, that date is in an incorrect format. Try again!")
-        return get_date()
-    return date
+        print("Sorry, that date/time is in an incorrect format. Try again!")
+        return get_datetime()
+    return dt
 
 def get_priority():
     priority_inp = input("Enter the priority (1-10): ")
@@ -41,21 +86,66 @@ def get_priority():
         return get_priority()
     return priority
 
+def get_category():
+    category = input("Enter the category (e.g., Work, Personal, Urgent): ")
+    return category
+
+def get_reminder_times():
+    reminder_times = []
+    while True:
+        reminder_time_inp = input("Enter reminder time before deadline (e.g., 1d for 1 day, 2h for 2 hours) or 'done' to finish: ")
+        if reminder_time_inp.lower() == 'done':
+            break
+        try:
+            if reminder_time_inp.endswith('d'):
+                days = int(reminder_time_inp[:-1])
+                reminder_times.append(datetime.timedelta(days=days))
+            elif reminder_time_inp.endswith('h'):
+                hours = int(reminder_time_inp[:-1])
+                reminder_times.append(datetime.timedelta(hours=hours))
+            elif reminder_time_inp.endswith('m'):
+                minutes = int(reminder_time_inp[:-1])
+                reminder_times.append(datetime.timedelta(minutes=minutes))
+            else:
+                print("Invalid format. Please enter in the format '1d', '2h', or '30m'.")
+        except ValueError:
+            print("Invalid time. Try again.")
+    return reminder_times
+
+def get_recurring():
+    recurring = input("Is this a recurring task? (daily, weekly, monthly, none): ").strip().lower()
+    if recurring not in ["daily", "weekly", "monthly", "none"]:
+        print("Invalid input. Please enter 'daily', 'weekly', 'monthly', or 'none'.")
+        return get_recurring()
+    return recurring
+
 def task_to_str(task):
-    # task = [name: str, deadline: datetime, priority: int]
-    return f"{task[0]}: deadline is {task[1].strftime('%m/%d/%Y')} and priority is {task[2]}"
+    # task = [name: str, deadline: datetime, priority: int, category: str, recurring: str, reminder_times: list]
+    return f"{task[0]}: deadline is {task[1].strftime('%m/%d/%Y %H:%M')} and priority is {task[2]}, category is {task[3]}, recurring: {task[4]}"
+
+def reminder_to_str(reminder):
+    # reminder = [text: str, deadline: datetime, reminder_times: list]
+    deadline_str = reminder[1].strftime('%m/%d/%Y %H:%M') if reminder[1] else 'No deadline'
+    return f"{reminder[0]}: deadline is {deadline_str}"
 
 def print_list(items, item_type):
     print(f"{item_type.capitalize()}:")
     for i, item in enumerate(items, 1):
-        print(f"{i}: {item if item_type != 'task' else task_to_str(item)}")
+        if item_type == 'task':
+            print(f"{i}: {task_to_str(item)}")
+        elif item_type == 'reminder':
+            print(f"{i}: {reminder_to_str(item)}")
+        else:
+            print(f"{i}: {item}")
     if not items:
         print(f"No {item_type}s found.")
 
 def add_item(item_type):
     if item_type == "reminder":
-        reminder = input("What reminder do you want to add? Please type your reminder below: ")
-        reminders.append(reminder)
+        reminder_text = input("What reminder do you want to add? Please type your reminder below: ")
+        reminder_deadline = get_datetime() if input("Does this reminder have a deadline? (y/n): ").strip().lower() == 'y' else None
+        reminder_times = get_reminder_times()
+        reminders.append([reminder_text, reminder_deadline, reminder_times])
         save_data("reminders.pkl", reminders)
     elif item_type == "note":
         note = input("What note do you want to add? Please type your note below: ")
@@ -63,9 +153,12 @@ def add_item(item_type):
         save_data("notes.pkl", notes)
     elif item_type == "task":
         task_name = input("What is the name of your task? ")
-        deadline = get_date()
+        deadline = get_datetime()
         priority = get_priority()
-        tasks.append([task_name, deadline, priority])
+        category = get_category()
+        recurring = get_recurring()
+        reminder_times = get_reminder_times()
+        tasks.append([task_name, deadline, priority, category, recurring, reminder_times])
         save_data("tasks.pkl", tasks)
 
 def delete_item(item_type):
@@ -103,15 +196,24 @@ def update_task():
         task = tasks[update - 1]
         print("Updating task:", task_to_str(task))
         task_name = input("Enter new name for the task (leave blank to keep current): ")
-        deadline = input("Enter new deadline for the task (MM/DD/YYYY, leave blank to keep current): ")
+        deadline = input("Enter new deadline for the task (MM/DD/YYYY HH:MM, leave blank to keep current): ")
         priority = input("Enter new priority for the task (1-10, leave blank to keep current): ")
+        category = input("Enter new category for the task (leave blank to keep current): ")
+        recurring = input("Enter new recurring interval for the task (daily, weekly, monthly, none; leave blank to keep current): ")
+        reminder_times = input("Enter new reminder times (e.g., 1d, 2h, 30m) or leave blank to keep current: ")
 
         if task_name:
             task[0] = task_name
         if deadline:
-            task[1] = datetime.datetime.strptime(deadline, "%m/%d/%Y")
+            task[1] = datetime.datetime.strptime(deadline, "%m/%d/%Y %H:%M")
         if priority:
             task[2] = int(priority)
+        if category:
+            task[3] = category
+        if recurring:
+            task[4] = recurring
+        if reminder_times:
+            task[5] = get_reminder_times()
 
         save_data("tasks.pkl", tasks)
         print("Task updated.")
@@ -122,48 +224,42 @@ def show_commands():
     print("Available commands:")
     print("ra to add reminder")
     print("rv to view reminders")
-    print("rd to delete reminder")
     print("na to add note")
     print("nv to view notes")
-    print("nd to delete note")
     print("ta to add task")
     print("tv to view tasks")
     print("td to delete task")
     print("tu to update task")
+    print("rd to delete reminder")
+    print("nd to delete note")
 
-firstrun = True
-
+# Main loop
 while True:
-    if firstrun:
-        print("What do you want to do? Type 'c' to view available commands.")
-        firstrun = False
-
-    command = input("").strip().lower()
-    print("\n")
-
-    if command == "c":
-        show_commands()
-    elif command == "ra":
+    command = input("Enter a command (type 'help' for available commands): ").strip().lower()
+    if command == 'ra':
         add_item("reminder")
-    elif command == "rv":
+    elif command == 'rv':
         print_list(reminders, "reminder")
-    elif command == "rd":
-        delete_item("reminder")
-    elif command == "na":
+    elif command == 'na':
         add_item("note")
-    elif command == "nv":
+    elif command == 'nv':
         print_list(notes, "note")
-    elif command == "nd":
-        delete_item("note")
-    elif command == "ta":
+    elif command == 'ta':
         add_item("task")
-    elif command == "tv":
+    elif command == 'tv':
         print_list(tasks, "task")
-    elif command == "td":
+    elif command == 'td':
         delete_item("task")
-    elif command == "tu":
+    elif command == 'tu':
         update_task()
+    elif command == 'rd':
+        delete_item("reminder")
+    elif command == 'nd':
+        delete_item("note")
+    elif command == 'help':
+        show_commands()
+    elif command == 'exit':
+        break
     else:
-        print("Command invalid, try again.")
+        print("Unknown command. Type 'help' for available commands.")
 
-    print("\nCommand successful.\n")
