@@ -3,7 +3,7 @@ import os
 import datetime
 import threading
 import time
-import subprocess
+from plyer import notification
 
 # Helper function to load data from pickle files
 def load_data(filename, default_value):
@@ -37,33 +37,6 @@ def update_structure():
 
 update_structure()
 
-# Background thread for handling reminders
-def reminder_thread():
-    while True:
-        now = datetime.datetime.now()
-        for task in tasks:
-            task_name, deadline, priority, category, recurring, reminder_times = task
-            if deadline and deadline <= now:
-                continue  # Skip past deadlines
-            for reminder_time in reminder_times:
-                reminder_datetime = deadline - reminder_time
-                if now >= reminder_datetime and now <= deadline:
-                    subprocess.Popen(['notify-send', f'Reminder: {task_name} due on {deadline}'])
-                    time.sleep(60)
-        for reminder in reminders:
-            reminder_text, reminder_deadline, reminder_times = reminder
-            if reminder_deadline and reminder_deadline <= now:
-                continue  # Skip past deadlines
-            for reminder_time in reminder_times:
-                reminder_datetime = reminder_deadline - reminder_time
-                if now >= reminder_datetime and now <= reminder_deadline:
-                    subprocess.Popen(['notify-send', f'Reminder: {reminder_text} due on {reminder_deadline}'])
-                    time.sleep(60)
-        time.sleep(60)
-
-thread = threading.Thread(target=reminder_thread)
-thread.daemon = True
-thread.start()
 
 def get_datetime():
     datetime_inp = input("Enter the date and time (MM/DD/YYYY HH:MM): ")
@@ -199,8 +172,8 @@ def update_task():
         deadline = input("Enter new deadline for the task (MM/DD/YYYY HH:MM, leave blank to keep current): ")
         priority = input("Enter new priority for the task (1-10, leave blank to keep current): ")
         category = input("Enter new category for the task (leave blank to keep current): ")
-        recurring = input("Enter new recurring interval for the task (daily, weekly, monthly, none; leave blank to keep current): ")
-        reminder_times = input("Enter new reminder times (e.g., 1d, 2h, 30m) or leave blank to keep current: ")
+        recurring = input("Enter new recurring status for the task (daily, weekly, monthly, none, leave blank to keep current): ").strip().lower()
+        reminder_times = input("Enter new reminder times for the task (e.g., 1d, 2h, 30m, separated by comma, leave blank to keep current): ").split(',')
 
         if task_name:
             task[0] = task_name
@@ -211,9 +184,12 @@ def update_task():
         if category:
             task[3] = category
         if recurring:
-            task[4] = recurring
-        if reminder_times:
-            task[5] = get_reminder_times()
+            task[4] = recurring if recurring in ["daily", "weekly", "monthly", "none"] else task[4]
+        if reminder_times != ['']:
+            task[5] = [datetime.timedelta(days=int(rt[:-1])) if rt.endswith('d') else
+                       datetime.timedelta(hours=int(rt[:-1])) if rt.endswith('h') else
+                       datetime.timedelta(minutes=int(rt[:-1])) if rt.endswith('m') else
+                       task[5] for rt in reminder_times]
 
         save_data("tasks.pkl", tasks)
         print("Task updated.")
@@ -224,14 +200,14 @@ def show_commands():
     print("Available commands:")
     print("ra to add reminder")
     print("rv to view reminders")
+    print("rd to delete reminder")
     print("na to add note")
     print("nv to view notes")
+    print("nd to delete note")
     print("ta to add task")
     print("tv to view tasks")
     print("td to delete task")
     print("tu to update task")
-    print("rd to delete reminder")
-    print("nd to delete note")
 
 # Main loop
 while True:
@@ -240,10 +216,14 @@ while True:
         add_item("reminder")
     elif command == 'rv':
         print_list(reminders, "reminder")
+    elif command == 'rd':
+        delete_item("reminder")
     elif command == 'na':
         add_item("note")
     elif command == 'nv':
         print_list(notes, "note")
+    elif command == 'nd':
+        delete_item("note")
     elif command == 'ta':
         add_item("task")
     elif command == 'tv':
@@ -252,14 +232,9 @@ while True:
         delete_item("task")
     elif command == 'tu':
         update_task()
-    elif command == 'rd':
-        delete_item("reminder")
-    elif command == 'nd':
-        delete_item("note")
     elif command == 'help':
         show_commands()
     elif command == 'exit':
         break
     else:
         print("Unknown command. Type 'help' for available commands.")
-
